@@ -6,6 +6,16 @@ const qrcode = require('qrcode-terminal');
 const OpenAI = require("openai");
 require('dotenv').config();
 
+// Path where the session data will be stored
+const SESSION_FILE_PATH = './session.json';
+
+// Load the session data if it has been previously saved
+let sessionData;
+if(fs.existsSync(SESSION_FILE_PATH)) {
+    sessionData = require(SESSION_FILE_PATH);
+}
+
+// Use the saved values
 const client = new Client({
     webVersion: '2.2409.2',
     webVersionCache: {
@@ -13,7 +23,7 @@ const client = new Client({
       remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2409.2.html'
     },
     session: sessionData,
-   puppeteer: {
+    puppeteer: {
       headless: true,
       args: ['--no-sandbox',
       '--disable-setuid-sandbox',
