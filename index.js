@@ -23,7 +23,7 @@ const client = new Client({
       remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2409.2.html'
     },
     session: sessionData,
-    puppeteer: {
+   puppeteer: {
       headless: true,
       args: ['--no-sandbox',
       '--disable-setuid-sandbox',
