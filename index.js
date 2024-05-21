@@ -1,21 +1,11 @@
 ///////////////////SETUP//////////////////////
 // Import necessary modules
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const { Client, LocalAuth, MessageMedia, ContactId } = require('whatsapp-web.js');
 const fs = require('fs');
 const qrcode = require('qrcode-terminal');
 const OpenAI = require("openai");
 require('dotenv').config();
 
-// Path where the session data will be stored
-const SESSION_FILE_PATH = './session.json';
-
-// Load the session data if it has been previously saved
-let sessionData;
-if(fs.existsSync(SESSION_FILE_PATH)) {
-    sessionData = require(SESSION_FILE_PATH);
-}
-
-// Use the saved values
 const client = new Client({
     webVersion: '2.2409.2',
     webVersionCache: {
@@ -39,12 +29,12 @@ const client = new Client({
 
 // Create a new OpenAI API client
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY // This is also the default, can be omitted
+    apiKey: process.env.OPENAI_API_KEY
 });
 
 // Show QR code for authentication
 client.on('qr', qr => {
-  qrcode.generate(qr, { small: true });
+    qrcode.generate(qr, { small: true });
 });
 
 // Initialize client
@@ -52,7 +42,7 @@ client.initialize();
 
 // Confirm client is ready
 client.on('ready', () => {
-  console.log('Client is ready!');
+    console.log('Client is ready!');
 });
 
 // Reconnect on disconnection
@@ -60,46 +50,33 @@ let reconnectAttempts = 0;
 const maxReconnectAttempts = 5;
 
 function reconnectClient() {
-  if (reconnectAttempts < maxReconnectAttempts) {
-    console.log('Attempting to reconnect...');
-    client.initialize();
-    reconnectAttempts++;
-  } else {
-    console.log(`Failed to reconnect after ${maxReconnectAttempts} attempts. Exiting...`);
-    process.exit(1);
-  }
+    if (reconnectAttempts < maxReconnectAttempts) {
+        console.log('Attempting to reconnect...');
+        client.initialize();
+        reconnectAttempts++;
+    } else {
+        console.log(`Failed to reconnect after ${maxReconnectAttempts} attempts. Exiting...`);
+        process.exit(1);
+    }
 }
 
 client.on('disconnected', (reason) => {
-  console.log('Client disconnected: ' + reason);
-  reconnectClient();
+    console.log('Client disconnected: ' + reason);
+    reconnectClient();
 });
 
 // Event triggered when the client is ready
 client.on('ready', async () => {
-  // Set the bot's state as "online"
-  await client.sendPresenceAvailable();
+    await client.sendPresenceAvailable();
 });
 
 ///////////////////SCRIPT/////////////////////////
 client.on('message', async message => {
     try {
         const chat = await message.getChat();
-
-        // Check if the chat is a group and has more than 100 members
-        if (chat.isGroup) {
-            const participants = await chat.participants;
-            if (participants.length <= 100) {
-                console.log('Group has 100 or fewer members. Skipping message processing.');
-                return; // Exit if there are 100 or fewer members
-            }
-        } else {
-            console.log('This is not a group chat. Skipping message processing.');
-            return; // Exit if it's not a group chat
-        }
-
         const messageBody = message.body.trim();
-        const contactName = (await message.getContact()).name;
+        const contact = await message.getContact();
+        const contactName = contact.pushname || contact.name || contact.number;
         console.log(contactName, ':', messageBody);
 
         /////////////////////Summarize Messages////////////////
@@ -113,77 +90,58 @@ client.on('message', async message => {
             }
 
             if (isNaN(limit) || limit <= 0) {
-                // Summarize messages from the last hour
+                // Summarize messages from the last 3 hours
                 const messages = await chat.fetchMessages({ limit: 500 });
                 const lastMessage = messages[messages.length - 2];
                 const lastMessageTimestamp = lastMessage.timestamp;
-                const oneHourBeforeLastMessageTimestamp = lastMessageTimestamp - 3600;
-                const messagesSinceLastHour = messages.slice(0, -1).filter(message => (
-                    message.timestamp > oneHourBeforeLastMessageTimestamp &&
+                const threeHoursBeforeLastMessageTimestamp = lastMessageTimestamp - 10800;
+                const messagesSinceLastThreeHours = messages.slice(0, -1).filter(message => (
+                    message.timestamp > threeHoursBeforeLastMessageTimestamp &&
                     message.fromMe === false &&
                     message.body.trim() !== ''
                 ));
-                const messageTexts = (await Promise.all(messagesSinceLastHour.map(async message => {
+                const messageTexts = (await Promise.all(messagesSinceLastThreeHours.map(async message => {
                     const contact = await message.getContact();
-                    const name = contact.name || 'Unknown';
+                    const name = contact.pushname || contact.name || contact.number;
                     return `>>${name}: ${message.body}.\n`;
                 }))).join(' ');
 
                 console.log('\n---------------------RESUMO DE MENSAGENS---------------------\nMENSSAGENS:\n', messageTexts);
-                const contact = await message.getContact();
-                const name = contact.name || 'Unknown';
-                let prompt = `${name} está pedindo para que você faça um resumo das mensagens dessa conversa do grupo e diga no início da sua resposta que esse é o resumo das mensagens na última hora:\n${messageTexts}`;
-                runCompletion(prompt)
+                runCompletion(messageTexts)
                     .then(result => result.trim())
-                    .then(result => message.reply(result) + console.log('\nBOT: ' + result + '\n---------------------FIM---------------------\n'))
-                    .then(sentMessage => {
-                        // Delete the bot's message after 5 minutes
-                        setTimeout(() => {
-                            sentMessage.delete(true);
-                        }, 5 * 60 * 1000);
-                    });
+                    .then(result => message.reply(result) + console.log('\nBOT: ' + result + '\n---------------------FIM---------------------\n'));
             } else {
                 // Summarize the specified number of messages
                 const messages = await chat.fetchMessages({ limit: limit + 1 });
-                const messageswithoutme = messages.slice(0, -1).filter(message => (
+                const messagesWithoutMe = messages.slice(0, -1).filter(message => (
                     message.fromMe === false &&
                     message.body.trim() !== ''
                 ));
-                const messageTexts = (await Promise.all(messageswithoutme.map(async message => {
+                const messageTexts = (await Promise.all(messagesWithoutMe.map(async message => {
                     const contact = await message.getContact();
-                    const name = contact.name || 'Unknown';
+                    const name = contact.pushname || contact.name || contact.number;
                     return `>>${name}: ${message.body}.\n`;
                 }))).join(' ');
 
                 console.log('\n---------------------RESUMO DE MENSAGENS #---------------------\nMENSSAGENS:\n', messageTexts);
-                const contact = await message.getContact();
-                const name = contact.name || 'Unknown';
-                let prompt = `${name} está pedindo para que você faça um resumo dessas últimas mensagens dessa conversa do grupo:\n${messageTexts}`;
-                runCompletion(prompt)
+                runCompletion(messageTexts)
                     .then(result => result.trim())
-                    .then(result => message.reply(result) + console.log('\nBOT: ' + result + '\n---------------------FIM---------------------\n'))
-                    .then(sentMessage => {
-                        // Delete the bot's message after 5 minutes
-                        setTimeout(() => {
-                            sentMessage.delete(true);
-                        }, 5 * 60 * 1000);
-                    });
+                    .then(result => message.reply(result) + console.log('\nBOT: ' + result + '\n---------------------FIM---------------------\n'));
             }
         }
     } catch (error) {
         console.error('An error occurred while processing a message:', error);
-        // Handle the error or log it, but don't stop the client
     }
 });
 
 /////////////////////FUNCTIONS/////////////////////////
-async function runCompletion(prompt) {
+async function runCompletion(messageTexts) {
     try {
         // Bot function
-        const botRole = "Você é um bot assistente pessoal em um grupo de WhatsApp, o qual está coordenando ajuda e suprimentos para uma região afetada por um disastre natural. Sua função resumir as mensagens, em quanto mantendo informações relevante ao grupo.\n\n";
+        const botRole = "Você é um bot assistente pessoal em um grupo de WhatsApp, o qual está coordenando ajuda e suprimentos para uma região afetada por um desastre natural. Sua função é resumir as mensagens, enquanto mantém informações relevantes ao grupo.\n1. Se houver pessoas doando algo, faça uma lista de doações nesse formato:\n\"DOAÇÃO: Item – Quantidade – Local – Nome do Usuário ou Número de telefone\"\n2. Se houver pessoas pedindo doações, faça uma lista de doações nesse formato:\n\"PEDIDOS: Item – Quantidade – Local – Nome do Usuário ou Número de telefone\"\n3. Se Não houver informação relevante para resumir ou falta de informação apenas informe o usuário em uma simples frase.\n";
 
         // Add the bot's role to the user's prompt
-        const completePrompt = botRole + prompt;
+        const completePrompt = botRole + messageTexts;
 
         const completion = await openai.chat.completions.create({
             messages: [{ "role": "system", "content": "You are a WhatsApp group assistant." },
@@ -194,7 +152,6 @@ async function runCompletion(prompt) {
         return completion.choices[0].message.content;
     } catch (error) {
         console.error('An error occurred in the runCompletion function:', error);
-        // Handle the error or log it
         return ''; // Return an empty string or other appropriate value in case of an error
     }
 }
